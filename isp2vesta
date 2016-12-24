@@ -3,7 +3,7 @@
 DEFAULT_WEB_TEMPLATE='php54'
 
 [ "$(whoami)" != 'root' ] && ( echo "У вас нет прав для запуска!";  exit 0 )
-v='0.04 Beta VPS-server.ru edition :o)'
+v='0.05 Beta VPS-server.ru edition :o)'
 usage() {
     cat <<EOM
 
@@ -138,8 +138,7 @@ restore_templates() {
 TARIFS=$(cat $ISP_CFG |perl -n -e '/Preset "(.*)"/is && print "$1\n"' |sed 's/ /_/g')
 NS=$(cat $ISP_CFG |perl -n -e '/NameServers([\s]*)([\S\w\d\.\-]*)([\s]*)([\S\w\d\.\-]*)/is && print "$2, $4"' )
 
-for TARIF in $TARIFS
-do
+for TARIF in $TARIFS; do
   cat $ISP_CFG |grep -A 27 -E 'Preset "'$TARIF'"' >  $TMP
   WEB_TEMPLATE=$(echo $TARIF)
   BANDWIDTH=$(cat $TMP |grep -w 'Bandwidth' |awk '{print $2}' )
@@ -164,7 +163,6 @@ do
   fi
   TIME=$(date '+%T')
   DATE=$(date '+%Y-%m-%d')
-
 echo "
 WEB_TEMPLATE='phpcgi'
 PROXY_TEMPLATE='default'
@@ -227,21 +225,19 @@ if [ -n "$USER_BASES" ]; then
   rep "#----------------------------------------------------------------------"
   rep "USER->'$USER' USERDB_ID->'$USERDB_ID'  USER_BASES->'$USER_BASES'"
   rep "#----------------------------------------------------------------------"
-  # echo_bold 'MySQL databases copy'
-  # _dump=$DUMP_DIR/dump.sql.gz   # '/root/dump.sql.gz'
   echo -n "Copy databases ISPManager for user "; echo_bold "$USER"
   for CUR_DB in $USER_BASES; do
-	   CUR_DB=${CUR_DB//' '/}
-	    if [ -n "$CUR_DB" ]; then
-	       echo_bold "Copy database $CUR_DB:"
-	       MySQL_USER=`cat $ALL_GRANTS |grep $CUR_DB |sed "s/'//g" |$PERL -n -e '/GRANT ALL *.* TO ([\w\d\-\_]*)@localhost/&& print "$1"'`
-	       MD5=`cat $ALL_GRANTS |sed "s/'//g" |grep $MySQL_USER |$PERL -n -e '/IDENTIFIED BY PASSWORD (\S*)/ && print "$1 "'| awk '{print $1}'`
-         TMPDB=`echo $CUR_DB |sed 's/'$USER'\_//g' `
-	       TMPUSER=`echo $MySQL_USER |sed 's/'$USER'\_//g' `
-         rep "#-DB $CUR_DB begin report"
-      	 rep "DB:'$CUR_DB';	MySQL user: '$MySQL_USER'; 	Passwd(MD5): '$MD5'"
-      	 rep "TMPDB: '$TMPDB'; TMPUSER: '$TMPUSER'"
-
+    CUR_DB=$(echo  $CUR_DB| xargs)
+    CUR_DB=${CUR_DB//' '/}
+    if [ -n "$CUR_DB" ]; then
+		echo_bold "Copy database $CUR_DB:"
+		MySQL_USER=`cat $ALL_GRANTS |grep $CUR_DB |sed "s/'//g" |$PERL -n -e '/^GRANT USAGE ON *.* TO (.*)\@localhost IDENTIFIED BY PASSWORD (.*);$/ && print "$1"'`
+		MD5=`cat $ALL_GRANTS |grep $CUR_DB |sed "s/'//g"  |$PERL -n -e '/^GRANT USAGE ON *.* TO (.*)\@localhost IDENTIFIED BY PASSWORD (.*);$/ && print "$2"'`
+		TMPDB=`echo $CUR_DB |sed 's/'$USER'\_//g' `
+		TMPUSER=`echo $MySQL_USER |sed 's/'$USER'\_//g' `
+		rep "#-DB $CUR_DB begin report"
+		rep "DB:'$CUR_DB';	MySQL user: '$MySQL_USER'; 	Passwd(MD5): '$MD5'"
+		rep "TMPDB: '$TMPDB'; TMPUSER: '$TMPUSER'"
       	if [ "$TMPDB" != "$CUR_DB" -a "$TMPUSER" != "$USER" ]; then
       	  # USER DATABASE DBUSER DBPASS [TYPE] [HOST] [CHARSET]
       	  #echo "$VESTA/bin/v-add-database '$USER' '$TMPDB' '$TMPUSER' '$MD5' 'mysql' 'localhost'"
@@ -250,13 +246,7 @@ if [ -n "$USER_BASES" ]; then
       	  $VESTA/bin/v-add-database "$USER" "$TMPDB" "$TMPUSER" "$MD5" 'mysql' 'localhost'
       	  rep "DB '$CUR_DB' and user '$MySQL_USER' with PREFIX"
       	else
-      	# No prefix
-      	  # LAST_DB_NUM=`ls -da /var/lib/mysql/"$USER"_db* 2>/dev/null | wc -l`
-      	  # DB_NUM=$(($LAST_DB_NUM + 1))
-      	  # $VESTA/bin/v-add-database "$USER" db"$DB_NUM" u"$DB_NUM" "$MD5" 'mysql' 'localhost'
-#	  echo "DB='$CUR_DB' DBUSER='$MySQL_USER' MD5='*2BB322AF0EB0149340BA0DFCFF790B883BD3A3E2' HOST='localhost' TYPE='mysql' CHARSET='UTF8' U_DISK='0' SUSPENDED='no' TIME='$TIME' DATE='$DATE'" >> "$VESTA/data/users/$USER/db.conf"
       	  rep "DB '$CUR_DB' and user '$MySQL_USER' NO PREFIX"
-      	  # rep "Added in MySQL 'db$DB_NUM' 'u$DB_NUM'"
       	fi
 	_dump="$CUR_DB.sql.gz"
 
@@ -286,21 +276,17 @@ if [ -n "$USER_BASES" ]; then
         cat $ALL_GRANTS |grep "$CUR_DB" |mysql -u root -p$VESTA_DB_PASS || { z_fail; echo $?;  exit 0; } && z_done
         rep "PRIVILEGES for $CUR_DB: $?"
         rep "#----------------------------------------------------------------------"
-
         if !([ "$TMPDB" != "$CUR_DB" ] && [ "$TMPUSER" != "$USER" ]); then
-	  TIME=$(date '+%T')
-	  DATE=$(date '+%Y-%m-%d')
-#	  rm -rf "/var/lib/mysql/$USER"_db"$DB_NUM"
-#          rep "make link for $CUR_DB -> $USER _db$DB_NUM created successfully"
-	  echo "DB='$CUR_DB' DBUSER='$MySQL_USER' MD5='*2BB322AF0EB0149340BA0DFCFF790B883BD3A3E2' HOST='localhost' TYPE='mysql' CHARSET='UTF8' U_DISK='0' SUSPENDED='no' TIME='$TIME' DATE='$DATE'"  >> $VESTA/data/users/$USER/db.conf
+		  TIME=$(date '+%T')
+		  DATE=$(date '+%Y-%m-%d')
+		  echo "DB='$CUR_DB' DBUSER='$MySQL_USER' MD5='*2BB322AF0EB0149340BA0DFCFF790B883BD3A3E2' HOST='localhost' TYPE='mysql' CHARSET='UTF8' U_DISK='0' SUSPENDED='no' TIME='$TIME' DATE='$DATE'"  >> $VESTA/data/users/$USER/db.conf
         fi
       fi
     done
     # :o) на всякий случай ставим точку ;о)
-    cat $ALL_GRANTS |grep $USER |mysql -u root -p$VESTA_DB_PASS|| { z_fail; echo $?;  exit 0; } && echo -n "."
+    cat $ALL_GRANTS |grep $USER |mysql -u root -p$VESTA_DB_PASS|| { z_fail; echo $?;  exit 0; } && echo "*"
 fi
 }
-
 restore_users() {
 USERS=$(cat $ISP_CFG |sort  |perl -n -e '/Account "(.*)"/is && print "$1 "')
 if [[ -n "$USER_EXPORT" ]]; then
@@ -412,11 +398,10 @@ for USER in $USERS; do
 		done
 		MySQL_dump $USER
 		Email_Export $USER
-    echo_green "	$USER complete"
+    echo_green "$USER complete!"
   fi
 done
 }
-
 restore_dns_records(){
   z_wait " restore dns records $WEBDOMAIN"
   USER=$1
@@ -507,8 +492,10 @@ restore_dns_records(){
   z_done
 }
 #-
-export VESTA="/usr/local/vesta"
-echo `date "+%d-%m-%Y %H:%M:%S"` > $REPORT; clear;
+export VESTA="/usr/local/vesta"; echo `date "+%d-%m-%Y %H:%M:%S"` > $REPORT; clear; 
+echo "#-------------------------------------------------------------------#"
+echo_bold "# $v"
+echo "#-------------------------------------------------------------------#" 
 RSH_OPTIONS="$SSHPASS -p $PASSWD_SOURCE ssh -o StrictHostKeyChecking=no -l root"
 z_wait "Copy ISPmanager configs from server $IP_SOURCE"
 $RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:/usr/local/ispmgr /root/move/ > /dev/null 2>&1 && z_done || { echo_red "Error connect to $IP_SOURCE data loss OR ISPManager 4 config files not found! Exit."; exit 1; }
