@@ -1,6 +1,8 @@
 # isp2vesta
-This script can copy your users, domains, DB and email boxes from the ISPManager 4 to VestaCP....
-But sometimes can not copy :o)
+
+This script can copy your users, domains, DB and email data from the ISPManager 4 to VestaCP...
+But sometimes it can not  😨:o)
+
 
 Usage:
 bash isp2vesta IP-ADDRESS ROOT-PASWORD [ISP-USERNAME]
@@ -12,5 +14,8 @@ if [ISP-USERNAME] is all-disabled-users then copy only disabled users
 
 For example: isp2vesta 188.138.93.111 2dcxDHrjZf7qRY all-enabled-users
 
-:o)
+
+This script is produced by VPS-SERVER.RU company. We provide great servers for rent in the best data centers of the EU and the USA.
+We are always ready to help you with moving of your projects to our servers.
+We are pleased to give one month of free usage in case you are moving from ISP Manager 4! :o)
 

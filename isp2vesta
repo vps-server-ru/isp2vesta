@@ -342,47 +342,46 @@ for USER in $USERS; do
     else
       DOMAINS=$(cat $APACHE_CFG |grep -w "/var/www/$USER" |grep "Directory" |$PERL -n -e '/([\w\d\.\-\_]*)\>/ && print "$1 "')
     fi
-	  for DOMAIN in $DOMAINS;	do
-		    DOMAIN=$(echo $DOMAIN)
+	  for DOMAIN in $DOMAINS; do
+		DOMAIN=$(echo $DOMAIN)
         if [[ -n "$APACHE_CFG" ]]; then
-          ALIASES=$(cat $APACHE_CFG | grep -w $DOMAIN | $PERL -n -e '/ServerAlias (.*)$/ && print "$1 "'|$SED  s/"www.$DOMAIN"// )
-	        ALIASES=$(echo $ALIASES | $SED 's/^[ \t]*//')
+			ALIASES=$(cat $APACHE_CFG | grep -w $DOMAIN | $PERL -n -e '/ServerAlias (.*)$/ && print "$1 "'|$SED  s/"www.$DOMAIN"// )
+			ALIASES=$(echo $ALIASES | $SED 's/^[ \t]*//')
         fi
         WEBDOMAIN=$(echo $(CHARSET='UTF-8' idn -u $DOMAIN)|tr '\n' ' '|xargs )
-		    # Usage: v-add-domain USER DOMAIN [IP] [RESTART]
-		    nice -19 $VESTA/bin/v-add-domain $USER $WEBDOMAIN $IP
-        # echo "	#----------------------------------------------------------------------------------"
-		    [[ -n "$ALIASES" ]] && (echo "	ALIASES:" $(CHARSET='UTF-8' idn -u $ALIASES);)
-		    # echo "	#----------------------------------------------------------------------------------"
-    		if [[ -n "$ALIASES" ]]; then
-    		  ALIASES=$(echo $(CHARSET='UTF-8' idn -u $ALIASES)|tr '\n' ' ')
-    		  # v-add-web-domain-alias USER DOMAIN DOM_ALIAS [RESTART]
-    		  nice -19 $VESTA/bin/v-add-web-domain-alias $USER $WEBDOMAIN $ALIASES 'no'
-    		fi
-    		if [[ -n "$NGINX_CFG" ]]; then
+	    # Usage: v-add-domain USER DOMAIN [IP] [RESTART]
+		nice -19 $VESTA/bin/v-add-domain $USER $WEBDOMAIN $IP
+		# [[ -n "$ALIASES" ]] && (echo "	ALIASES:" $(CHARSET='UTF-8' idn -u $ALIASES);)
+    	if [[ -n "$ALIASES" ]]; then
+			echo "	ALIASES:" $(CHARSET='UTF-8' idn -u $ALIASES);
+			ALIASES=$(echo $(CHARSET='UTF-8' idn -u $ALIASES)|tr '\n' ' ')
+			# v-add-web-domain-alias USER DOMAIN DOM_ALIAS [RESTART]
+			nice -19 $VESTA/bin/v-add-web-domain-alias $USER $WEBDOMAIN $ALIASES 'no'
+    	fi
+    	if [[ -n "$NGINX_CFG" ]]; then
           restore_dns_records $USER $DOMAIN $WEBDOMAIN
           FILES=$(cat $NGINX_CFG |grep "/var/www/$USER/data/www/$DOMAIN" )
-    		  SSL=$(cat $NGINX_CFG |grep -A 40 "server_name $DOMAIN" |grep -w 'ssl_certificate' |$PERL -n -e '/([\S]*);/ && print "$1 "')
-    		  SSL_KEY=$(cat $NGINX_CFG |grep -A 40 "server_name $DOMAIN" |grep -w 'ssl_certificate_key ' |$PERL -n -e '/([\S]*);/ && print "$1 "')
+    	  SSL=$(cat $NGINX_CFG |grep -A 40 "server_name $DOMAIN" |grep -w 'ssl_certificate' |$PERL -n -e '/([\S]*);/ && print "$1 "')
+    	  SSL_KEY=$(cat $NGINX_CFG |grep -A 40 "server_name $DOMAIN" |grep -w 'ssl_certificate_key ' |$PERL -n -e '/([\S]*);/ && print "$1 "')
           if [[ -n "$FILES" ]]; then
             echo "	Copy files domain $WEBDOMAIN"
             # Usage: v-change-web-domain-tpl USER DOMAIN TEMPLATE [RESTART]
             nice -19 $VESTA/bin/v-change-web-domain-tpl $USER $WEBDOMAIN $PHP_VER
             if [[ -n "$SSL" ]] && [[ -n "$SSL_KEY" ]]; then
-              echo "From: $IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/ ->"
-              z_wait "-> To: /home/$USER/web/$WEBDOMAIN/public_shtml"
-              rm -f /home/$USER/web/$WEBDOMAIN/public_shtml/index.html
-              $RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/ /home/$USER/web/$WEBDOMAIN/public_shtml  > /dev/null 2>&1  &&  z_done  || { z_fail;	echo_red "	Error in source path $IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/"; continue; }
-              z_wait "	SSL Sertificate copy start"
-        			$RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:$SSL $SSL_DIR/
-        			$RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:$SSL_KEY $SSL_DIR/
-        			chmod 0600 $SSL_DIR/*
-        			crt=`basename "$SSL"`
-        			key=`basename "$SSL_KEY"`
-        			mv $SSL_DIR/$crt "$SSL_DIR/$DOMAIN.crt"
-        			mv $SSL_DIR/$key "$SSL_DIR/$DOMAIN.key"
-        			nice -19 $VESTA/bin/v-add-web-domain-ssl $USER $WEBDOMAIN $SSL_DIR 'single' 'no'
-        			$CHOWN -R $USER:$USER /home/$USER/web/$WEBDOMAIN/public_shtml/
+				echo "From: $IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/ ->"
+				z_wait "-> To: /home/$USER/web/$WEBDOMAIN/public_shtml"
+				rm -f /home/$USER/web/$WEBDOMAIN/public_shtml/index.html
+				$RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/ /home/$USER/web/$WEBDOMAIN/public_shtml  > /dev/null 2>&1  &&  z_done  || { z_fail;	echo_red "	Error in source path $IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/"; continue; }
+				z_wait "	SSL Sertificate copy start"
+				$RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:$SSL $SSL_DIR/
+				$RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:$SSL_KEY $SSL_DIR/
+				chmod 0600 $SSL_DIR/*
+				crt=`basename "$SSL"`
+				key=`basename "$SSL_KEY"`
+				mv $SSL_DIR/$crt "$SSL_DIR/$DOMAIN.crt"
+				mv $SSL_DIR/$key "$SSL_DIR/$DOMAIN.key"
+				nice -19 $VESTA/bin/v-add-web-domain-ssl $USER $WEBDOMAIN $SSL_DIR 'single' 'no'
+				$CHOWN -R $USER:$USER /home/$USER/web/$WEBDOMAIN/public_shtml/
             else
               echo "Copy files domain $WEBDOMAIN"
               rm -f /home/$USER/web/$WEBDOMAIN/public_html/index.html
