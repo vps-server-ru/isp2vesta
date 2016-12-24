@@ -3,7 +3,7 @@
 DEFAULT_WEB_TEMPLATE='php54'
 
 [ "$(whoami)" != 'root' ] && ( echo "У вас нет прав для запуска!";  exit 0 )
-v='0.05 Beta VPS-server.ru edition :o)'
+v='isp2vesta 0.05 Beta VPS-server.ru edition :o)'
 usage() {
     cat <<EOM
 
@@ -134,6 +134,12 @@ z_done() {
 z_fail() {
   echo -e "$POS${RED} fail $NOCOL"
 }
+z_time() {
+  TIME=$(date '+%T')
+  DATE=$(date '+%Y-%m-%d')
+  echo -ne " $DATE $TIME\n"
+}
+
 restore_templates() {
 TARIFS=$(cat $ISP_CFG |perl -n -e '/Preset "(.*)"/is && print "$1\n"' |sed 's/ /_/g')
 NS=$(cat $ISP_CFG |perl -n -e '/NameServers([\s]*)([\S\w\d\.\-]*)([\s]*)([\S\w\d\.\-]*)/is && print "$2, $4"' )
@@ -260,15 +266,14 @@ if [ -n "$USER_BASES" ]; then
         rep "dump $CUR_DB created successfully in remote servers"
         z_wait "	Copy dump $CUR_DB from ISPmanager MySQL"
         $RSYNC -ratlz --rsh="$RSH_OPTIONS" root@$IP_SOURCE:/root/dump.sql.gz $DUMP_DIR/$_dump
-        rep "dump $CUR_DB copy successfully from remote servers"
-        z_done
-        z_wait "	Restore database $CUR_DB in MySQL VestaCP"
+        rep "dump $CUR_DB copy successfully from remote servers"; z_done
+        z_wait "	Create database $CUR_DB in MySQL VestaCP"
         echo 'CREATE DATABASE IF NOT EXISTS `'$CUR_DB'` ;' |mysql -u "root" -p"$VESTA_DB_PASS" -N -B
         rep "CREATE DATABASE $CUR_DB successfully in MySQL"
-        gunzip -f $DUMP_DIR/$_dump; sleep 1
-	mysql -u "root" -p"$VESTA_DB_PASS" "$CUR_DB" < "$DUMP_DIR/$CUR_DB.sql" || { echo_red "Error in Database $CUR_DB ."; echo $?;  exit 3; }
+        gunzip -f $DUMP_DIR/$_dump; sleep 1; z_done
+        z_wait "	Restore DB $CUR_DB from dump in MySQL VestaCP"
+		mysql -u "root" -p"$VESTA_DB_PASS" "$CUR_DB" < "$DUMP_DIR/$CUR_DB.sql" || { echo_red "Error in Database $CUR_DB ."; echo $?; rep $?; } && z_done
         rep "dump $CUR_DB restore in MySQL successfully"
-        z_done
         z_wait "	Restore users and PRIVILEGES in MySQL VestaCP"
         rep "#----------------------------------------------------------------------"
         #cat $ALL_GRANTS |grep $CUR_DB |sed 's/Grants for .*/#### &/' |sed 's/$/;/' |mysql -u root -p$VESTA_DB_PASS || { z_fail; echo $?;  exit 3; } && z_done
@@ -312,10 +317,10 @@ if [[ -n "$USER_EXPORT" ]]; then
 fi
 for USER in $USERS; do
   cat $ISP_CFG | grep -A 28 -E 'Account "'$USER'"' > $TMP
-  IS_RESELLER=$(cat $TMP |grep -w 'UserLimit' |awk '{print $2}' )
-  if [ -z "$IS_RESELLER" ]; then
-	  echo_bold "User $USER start copy.."
-	  PACKAGE=`cat $TMP |grep -w "Preset" |awk '{print $2}' |xargs`
+  # IS_RESELLER=$(cat $TMP |grep -w 'UserLimit' |awk '{print $2}' )
+  if [[ -z $(cat $TMP |grep -w 'UserLimit' |awk '{print $2}' ) ]]; then
+	echo_bold "USER $USER START COPY FROM ISP to VestaCP.."
+	PACKAGE=`cat $TMP |grep -w "Preset" |awk '{print $2}' |xargs`
     if [ "$PACKAGE" == "custom" -o  "$PACKAGE" != "" ]; then
       PACKAGE="default"
     fi
@@ -344,6 +349,7 @@ for USER in $USERS; do
     fi
 	  for DOMAIN in $DOMAINS; do
 		DOMAIN=$(echo $DOMAIN)
+		echo -n "Domain $DOMAIN start copy"; z_time
         if [[ -n "$APACHE_CFG" ]]; then
 			ALIASES=$(cat $APACHE_CFG | grep -w $DOMAIN | $PERL -n -e '/ServerAlias (.*)$/ && print "$1 "'|$SED  s/"www.$DOMAIN"// )
 			ALIASES=$(echo $ALIASES | $SED 's/^[ \t]*//')
@@ -353,7 +359,7 @@ for USER in $USERS; do
 		nice -19 $VESTA/bin/v-add-domain $USER $WEBDOMAIN $IP
 		# [[ -n "$ALIASES" ]] && (echo "	ALIASES:" $(CHARSET='UTF-8' idn -u $ALIASES);)
     	if [[ -n "$ALIASES" ]]; then
-			echo "	ALIASES:" $(CHARSET='UTF-8' idn -u $ALIASES);
+			echo "ALIASES:" $(CHARSET='UTF-8' idn -u $ALIASES);
 			ALIASES=$(echo $(CHARSET='UTF-8' idn -u $ALIASES)|tr '\n' ' ')
 			# v-add-web-domain-alias USER DOMAIN DOM_ALIAS [RESTART]
 			nice -19 $VESTA/bin/v-add-web-domain-alias $USER $WEBDOMAIN $ALIASES 'no'
@@ -364,12 +370,12 @@ for USER in $USERS; do
     	  SSL=$(cat $NGINX_CFG |grep -A 40 "server_name $DOMAIN" |grep -w 'ssl_certificate' |$PERL -n -e '/([\S]*);/ && print "$1 "')
     	  SSL_KEY=$(cat $NGINX_CFG |grep -A 40 "server_name $DOMAIN" |grep -w 'ssl_certificate_key ' |$PERL -n -e '/([\S]*);/ && print "$1 "')
           if [[ -n "$FILES" ]]; then
-            echo "	Copy files domain $WEBDOMAIN"
+            echo -n "Copy files domain $WEBDOMAIN"; z_time
             # Usage: v-change-web-domain-tpl USER DOMAIN TEMPLATE [RESTART]
             nice -19 $VESTA/bin/v-change-web-domain-tpl $USER $WEBDOMAIN $PHP_VER
             if [[ -n "$SSL" ]] && [[ -n "$SSL_KEY" ]]; then
 				echo "From: $IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/ ->"
-				z_wait "-> To: /home/$USER/web/$WEBDOMAIN/public_shtml"
+				z_wait "To: /home/$USER/web/$WEBDOMAIN/public_shtml"
 				rm -f /home/$USER/web/$WEBDOMAIN/public_shtml/index.html
 				$RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/ /home/$USER/web/$WEBDOMAIN/public_shtml  > /dev/null 2>&1  &&  z_done  || { z_fail;	echo_red "	Error in source path $IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/"; continue; }
 				z_wait "	SSL Sertificate copy start"
@@ -383,26 +389,25 @@ for USER in $USERS; do
 				nice -19 $VESTA/bin/v-add-web-domain-ssl $USER $WEBDOMAIN $SSL_DIR 'single' 'no'
 				$CHOWN -R $USER:$USER /home/$USER/web/$WEBDOMAIN/public_shtml/
             else
-              echo "Copy files domain $WEBDOMAIN"
               rm -f /home/$USER/web/$WEBDOMAIN/public_html/index.html
               echo "From: $IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/ ->"
-              z_wait "-> To: /home/$USER/web/$WEBDOMAIN/public_html"
+              z_wait "To: /home/$USER/web/$WEBDOMAIN/public_html"
               $RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/ /home/$USER/web/$WEBDOMAIN/public_html > /dev/null 2>&1  && z_done || { z_fail; echo_red "	Error in source path $IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/"; continue; }
               $CHOWN -R $USER:$USER /home/$USER/web/$WEBDOMAIN/public_html/
             fi
           fi
 		  echo "$IP $DOMAIN" >> $HOSTSADD
 		fi
-		echo_green "	$DOMAIN complete"
+		echo_bold "$DOMAIN complete"
 		done
-		MySQL_dump $USER
-		Email_Export $USER
-    echo_green "$USER complete!"
+	MySQL_dump $USER
+	Email_Export $USER
+    echo_bold "USER $USER IS COMPLETE!"
   fi
 done
 }
 restore_dns_records(){
-  z_wait " restore dns records $WEBDOMAIN"
+  z_wait "Restore dns $WEBDOMAIN"
   USER=$1
   DOMAIN=$2
   WEBDOMAIN=$3
@@ -493,7 +498,7 @@ restore_dns_records(){
 #-
 export VESTA="/usr/local/vesta"; echo `date "+%d-%m-%Y %H:%M:%S"` > $REPORT; clear; 
 echo "#-------------------------------------------------------------------#"
-echo_bold "# $v"
+echo -n "# $v"; z_time 
 echo "#-------------------------------------------------------------------#" 
 RSH_OPTIONS="$SSHPASS -p $PASSWD_SOURCE ssh -o StrictHostKeyChecking=no -l root"
 z_wait "Copy ISPmanager configs from server $IP_SOURCE"
@@ -559,7 +564,8 @@ fi
 ALL_SOURCE_IPS=`$CAT $ISP_CFG |egrep "^ip\s+" |$AWK '{print $2}' |sort |uniq`
 VESTA_DB_PASS=`cat /root/.my.cnf |$PERL -n -e '/password=(.*)/ && print "$1"' |tr -d "'"`
 z_wait "Restore templates from ISPManager to VestaCP"; restore_templates; z_done
-echo_bold "Start copying users from ISPManager"; restore_users
+echo_bold "#-------------------------------------------------------------------#"
+echo -n "Start copying users from ISPManager"; z_time; restore_users
 echo_bold "#-------------------------------------------------------------------#"
 echo_green "Copying has been completed!"
 echo_bold "Error report file is $REPORT"
