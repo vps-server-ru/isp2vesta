@@ -3,7 +3,7 @@
 DEFAULT_WEB_TEMPLATE='php54'
 
 [ "$(whoami)" != 'root' ] && ( echo "У вас нет прав для запуска!";  exit 0 )
-v='isp2vesta 0.05 Beta VPS-server.ru edition :o)'
+v='isp2vesta 0.59 Beta VPS-server.ru edition :o)'
 usage() {
     cat <<EOM
 
@@ -88,6 +88,7 @@ if [ "$SSHPASS"  == '' ] || [ "$RSYNC" == '' ]; then
 	fi
   fi
   SSHPASS=`which sshpass`
+  RSYNC=`which rsync`
 fi
 if ! [ -d $MOVE_DIR ]; then
   mkdir $MOVE_DIR
@@ -139,7 +140,6 @@ z_time() {
   DATE=$(date '+%Y-%m-%d')
   echo -ne " $DATE $TIME\n"
 }
-
 restore_templates() {
 TARIFS=$(cat $ISP_CFG |perl -n -e '/Preset "(.*)"/is && print "$1\n"' |sed 's/ /_/g')
 NS=$(cat $ISP_CFG |perl -n -e '/NameServers([\s]*)([\S\w\d\.\-]*)([\s]*)([\S\w\d\.\-]*)/is && print "$2, $4"' )
@@ -194,7 +194,7 @@ done
 }
 
 Email_Export() {
-  USER=$1
+  USER=$(echo $1)
 
   _email='/root/Email_Export'
 
@@ -224,7 +224,7 @@ Email_Export() {
   fi
 }
 MySQL_dump() {
-USER=$1
+USER=$(echo $1)
 USERDB_ID=`cat $CFG_DIR/passwd |$PERL -n -e '/^'$USER':x:([\d]*):([\d]*)/ && print "$2\n"'`
 USER_BASES=`cat $ISP_DIR/etc/ispmgr.conf |$PERL -n -e '/^DbAssign "MySQL" ([\S]*) '$USERDB_ID'$/ && print "$1 "'`
 if [ -n "$USER_BASES" ]; then
@@ -308,14 +308,18 @@ if [[ -n "$USER_EXPORT" ]]; then
   for USER in $USERS; do
 	P=$(echo $USER_EXPORT |grep -w $USER )
         if  [ "$P" != "" ]; then
-	  T="$USER_TO_COPY $USER"
-	  USER_TO_COPY=$T
+		  T="$USER_TO_COPY $USER"
+		  USER_TO_COPY=$T
         fi
   done
-  USERS=$USER_TO_COPY
+  USERS=$(echo $USER_TO_COPY)
   fi
 fi
+echo "#-------------------------------------------------------------------#"
+echo "Users to copy:"$USERS
+echo "#-------------------------------------------------------------------#
 for USER in $USERS; do
+  USER=$(echo $USER)
   cat $ISP_CFG | grep -A 28 -E 'Account "'$USER'"' > $TMP
   # IS_RESELLER=$(cat $TMP |grep -w 'UserLimit' |awk '{print $2}' )
   if [[ -z $(cat $TMP |grep -w 'UserLimit' |awk '{print $2}' ) ]]; then
@@ -327,10 +331,9 @@ for USER in $USERS; do
     if [ -f "$ISP_DIR/var/userconf/ispmgr.$USER" ]; then
       EMAIL=$($PERL -n -e '/^Email\s+(.*)$/ && print "$1\n"' $ISP_DIR/var/userconf/ispmgr.$USER)
     fi
-	  [ "$EMAIL" = '' ] && EMAIL='support@vps-server.ru'; rep $USER
-	  PASSWORD=$(date +%s | sha256sum | base64 | head -c 32 ; echo)
-    # PASSWD_SHADOW_OLD=$(cat $CFG_DIR/shadow |grep ^$USER: |awk -F':' '$2 ~ "\$" {print $2}')
-	  nice -19 $VESTA/bin/v-add-user $USER $PASSWORD $EMAIL $PACKAGE $FNAME $LNAME  >> $REPORT
+	[ "$EMAIL" = '' ] && EMAIL='support@vps-server.ru'; rep "User $USER email not fount in ISPManager conf. Set $EMAIL" 
+	PASSWORD=$(date +%s | sha256sum | base64 | head -c 32 ; echo)
+	nice -19 $VESTA/bin/v-add-user $USER $PASSWORD $EMAIL $PACKAGE $FNAME $LNAME  >> $REPORT
     echo "$USER $PASSWORD $EMAIL $PACKAGE $FNAME $LNAME" >> $USERSINFO
     $RSYNC -ratlz --rsh="$RSH_OPTIONS" "root@$IP_SOURCE:/var/www/$USER/data/php-bin/php" $TMP > /dev/null 2>&1
     PHP_VER=`cat $TMP |$PERL -ne '/(\w+\d+)$/ && print "$1"'`
@@ -402,15 +405,15 @@ for USER in $USERS; do
 		done
 	MySQL_dump $USER
 	Email_Export $USER
-    echo_bold "USER $USER IS COMPLETE!"
+    echo_bold "User $USER IS COMPLETE!"
   fi
 done
 }
 restore_dns_records(){
   z_wait "Restore dns $WEBDOMAIN"
-  USER=$1
-  DOMAIN=$2
-  WEBDOMAIN=$3
+  USER=$(echo $1)
+  DOMAIN=$(echo $2)
+  WEBDOMAIN=$(echo $3)
   BIND_FILE=`cat $NAMED_CFG |$PERL -n -e '/file "(\/.*\/'$DOMAIN')";$/ &&  print "$1\n"'`
   if [[ -n "$BIND_FILE" ]]; then
     $RSYNC -ratlz --rsh="$RSH_OPTIONS" root@$IP_SOURCE:$BIND_FILE "$CFG_DIR/$DOMAIN.dns"
@@ -572,6 +575,7 @@ echo_bold "Error report file is $REPORT"
 echo_bold "User info in file  $USERSINFO"
 echo_bold "All email boxes and passwords you can find in file $MAIL_BOXES"
 echo_bold "All domains for add in /etc/hosts for Linux"
-echo_bold "Or C:\Windows\System32\drivers\etc you can find in file $HOSTSADD"
+echo_bold "Or C:\Windows\System32\drivers\etc\hosts for Win-must-die
+echo_bold "You can find in file $HOSTSADD"
 echo_bold "#-------------------------------------------------------------------#"
 exit 0
