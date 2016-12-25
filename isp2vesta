@@ -1,0 +1,582 @@
+#!/bin/bash
+
+DEFAULT_WEB_TEMPLATE='php54'
+
+[ "$(whoami)" != 'root' ] && ( echo "У вас нет прав для запуска!";  exit 0 )
+v='isp2vesta 0.59 Beta VPS-server.ru edition :o)'
+usage() {
+    cat <<EOM
+
+isp2vesta version $v
+This script can copy your users, domains, DB and email boxes from the ISPManager 4 to VestaCP....
+But sometimes can not copy :o)
+
+Usage:
+bash $(basename $0) IP-ADDRESS ROOT-PASWORD [ISP-USERNAME]
+For example: $(basename $0) 188.138.93.111 2dcxDHrjZf7qRY myname
+
+if [ISP-USERNAME] is empty then copyed ALL users
+if [ISP-USERNAME] is all-enabled-users then copy only enabled users
+if [ISP-USERNAME] is all-disabled-users then copy only disabled users
+
+For example: $(basename $0) 188.138.93.111 2dcxDHrjZf7qRY all-enabled-users
+
+:o)
+
+EOM
+    exit 0
+}
+[ -z $1 ] || [ -z $2 ] && { usage; }
+IP_SOURCE=$1
+PASSWD_SOURCE=$2
+USER_EXPORT=$3
+MAIL_BOXES="/root/MailBoxes.txt"
+REPORT="/root/report.rep"
+USERSINFO="/root/userinfo.txt"
+HOSTSADD='/root/hostadd.txt'
+if ! [ -f /etc/profile.d/vesta.sh ]; then
+  echo 'VestaCP is not installed?'
+  exit 0
+else
+  source /etc/profile.d/vesta.sh
+  source $VESTA/func/rebuild.sh
+fi
+MOVE_DIR="/root/move"
+DUMP_DIR="/root/move/dump"
+SSL_DIR="/etc/ssl.local"
+ISP_DIR="$MOVE_DIR/ispmgr"
+CFG_DIR="$MOVE_DIR/conf"
+TMP="/tmp/tempo.tmp"
+ALL_GRANTS="/root/grants.sql"
+RSYNC=`which rsync`
+CHOWN=`which chown`
+SSHPASS=`which sshpass`
+SED=`which sed`
+PERL=`which perl`
+CAT=`which cat`
+AWK=`which awk`
+FNAME='UserName'
+LNAME='UserLastName'
+ISP_CFG="$MOVE_DIR/ispmgr/etc/ispmgr.conf"
+EXCLUDE_DIRS="root httpd-cert httpd-logs index.html nginx-logs php-bin tmp"
+IP=$($VESTA/bin/v-list-sys-ips | tail -1 | awk '{print $1}')
+RO='-ratlz --info=progress2 --quiet'
+rel=$(cat /etc/*-release |grep 'Debian')
+if [ -n "$rel" ]; then
+	release='debian'
+else
+	rel=$(cat /etc/*-release |grep 'CentOS')
+	if [ -n "$rel" ]; then
+		release='centos'
+		RO='-ratlz --quiet'
+	else
+	rel=$(cat /etc/*-release |grep 'Ubuntu')
+	if [ -n "$rel" ]; then
+		release='ubuntu'
+	  else
+		clear; echo_bold "Not supported OS version! Please contact with support@vps-server.ru"; exit 3
+	  fi
+	fi
+fi
+if [ "$SSHPASS"  == '' ] || [ "$RSYNC" == '' ]; then
+  if [ "$release" == 'debian' ] || [ "$release" == 'ubuntu' ]; then
+      	apt-get install sshpass rsync -y
+  else
+	if [ "$release" == 'centos' ]; then
+		yum install epel-release -y
+		yum install sshpass rsync -y
+	fi
+  fi
+  SSHPASS=`which sshpass`
+  RSYNC=`which rsync`
+fi
+if ! [ -d $MOVE_DIR ]; then
+  mkdir $MOVE_DIR
+fi
+if ! [ -d $DUMP_DIR ]; then
+	mkdir $DUMP_DIR
+else
+	rm -rf $DUMP_DIR/*
+fi
+if ! [ -d $CFG_DIR ]; then
+  mkdir $CFG_DIR
+fi
+if ! [ -d $SSL_DIR ]; then
+  mkdir $SSL_DIR
+  chmod 0711 $SSL_DIR
+fi
+#--
+POS="\033[65G"
+RED="\033[1;31m"
+NOCOL="\033[00m"
+GREEN="\033[1;32m"
+CYAN="\033[1;36m"
+GREY="\033[0;37m"
+export LC_ALL=en_US.UTF-8
+rep() {
+	echo $* >> $REPORT
+}
+echo_red() {
+  echo -e "\033[01;31m$*\033[00m"
+  echo $* >> $REPORT
+}
+echo_green() {
+  echo -e "\033[01;32m$*\033[00m"
+}
+echo_bold() {
+  echo -e "\033[0;1m$*\033[00m"
+}
+z_wait() {
+	echo -ne "  $@$POS${BLUE} wait $NOCOL"
+}
+z_done() {
+  echo -e "$POS${GREEN} done $NOCOL"
+}
+z_fail() {
+  echo -e "$POS${RED} fail $NOCOL"
+}
+z_time() {
+  TIME=$(date '+%T')
+  DATE=$(date '+%Y-%m-%d')
+  echo -ne " $DATE $TIME\n"
+}
+restore_templates() {
+TARIFS=$(cat $ISP_CFG |perl -n -e '/Preset "(.*)"/is && print "$1\n"' |sed 's/ /_/g')
+NS=$(cat $ISP_CFG |perl -n -e '/NameServers([\s]*)([\S\w\d\.\-]*)([\s]*)([\S\w\d\.\-]*)/is && print "$2, $4"' )
+
+for TARIF in $TARIFS; do
+  cat $ISP_CFG |grep -A 27 -E 'Preset "'$TARIF'"' >  $TMP
+  WEB_TEMPLATE=$(echo $TARIF)
+  BANDWIDTH=$(cat $TMP |grep -w 'Bandwidth' |awk '{print $2}' )
+  [ "$BANDWIDTH" = '' ] && BANDWIDTH='10488576'
+  WEB_DOMAINS=$(cat $TMP |grep -w 'WebDomain' |awk '{print $2}' )
+  [ "$WEB_DOMAINS" = '' ] && WEB_DOMAINS='0'
+  WEB_ALIASES=$(cat $TMP |grep -w 'Domain' |awk '{print $2}' )
+  [ "$WEB_ALIASES" = '' ] && WEB_ALIASES='0'
+  MAIL_DOMAINS=$(cat $TMP |grep -w 'MailDomain' |awk '{print $2}' )
+  [ "$MAIL_DOMAINS" = '' ] && MAIL_DOMAINS='0'
+  MAIL_ACCOUNTS=$(cat $TMP |grep -w 'Mail' |awk '{print $2}' )
+  [ "$MAIL_ACCOUNTS" = '' ] && MAIL_ACCOUNTS='0'
+  DATABASES=$(cat $TMP |grep -w 'Database' |awk '{print $2}' )
+  [ "$DATABASES" = '' ] && DATABASES='0'
+  DISK_QUOTA=$(cat $TMP |grep -w 'Disk' |awk '{print $2}' )
+  [ "$DISK_QUOTA" = '' ] && DISK_QUOTA='0'
+  SHELL=$(cat $TMP |grep -w 'Shell' |awk '{print $2}' )
+  if [ "$SHELL" == 'off' ] || [ "$SHELL" == '' ]; then
+     SHELL='nologin'
+  else
+     SHELL='/bin/sh'
+  fi
+  TIME=$(date '+%T')
+  DATE=$(date '+%Y-%m-%d')
+echo "
+WEB_TEMPLATE='phpcgi'
+PROXY_TEMPLATE='default'
+DNS_TEMPLATE='default'
+WEB_DOMAINS='$WEB_DOMAINS'
+WEB_ALIASES='$WEB_ALIASES'
+DNS_DOMAINS='100'
+DNS_RECORDS='2000'
+MAIL_DOMAINS='$MAIL_DOMAINS'
+MAIL_ACCOUNTS='$MAIL_ACCOUNTS'
+DATABASES='$DATABASES'
+CRON_JOBS='5'
+DISK_QUOTA='$DISK_QUOTA'
+BANDWIDTH='$BANDWIDTH'
+NS='$NS'
+SHELL='$SHELL'
+BACKUPS='3'
+TIME='$TIME'
+DATE='$DATE'
+" > /tmp/$TARIF.pkg
+  $VESTA/bin/v-add-user-package /tmp $TARIF yes > /dev/null 2>&1
+done
+}
+
+Email_Export() {
+  USER=$(echo $1)
+
+  _email='/root/Email_Export'
+
+  echo "#!/bin/bash
+
+  ls -R /var/www/$USER/data/email |awk '/:$/&&f{s=\$0;f=0}/:$/&&!f{sub(/:$/,\"\");s=\$0;f=1;next}NF&&f{ print s\"/\"\$0 }' |sed  \"s/\/var\/www\/$USER\/data\/email\///g\" |grep '/' > $_email
+
+  " > $MOVE_DIR/Email_Export.sh
+
+  $RSH_OPTIONS $IP_SOURCE 'bash -s ' < $MOVE_DIR/Email_Export.sh > /dev/null 2>&1
+  $RSYNC -ratlz --rsh="$RSH_OPTIONS" root@$IP_SOURCE:$_email /root/move/
+  sed -i -e 's/\//:/g' $MOVE_DIR/Email_Export
+  if [ -s $MOVE_DIR/Email_Export ]; then
+	  echo_bold "CREATE Email Boxes for user $USER:"
+      echo "#--------------------------------------------------" >> $MAIL_BOXES
+      echo "USER: $USER" >> $MAIL_BOXES
+      while IFS=: read DOMAIN ACCOUNT; do
+          PASSWORD=$(tr -cd '[:alnum:]' < /dev/urandom |fold -w30 |head -n1 )
+          # options: USER DOMAIN ACCOUNT PASSWORD [QUOTA]
+          z_wait "Create email box $ACCOUNT@$DOMAIN"
+          $VESTA/bin/v-add-mail-account $USER $DOMAIN $ACCOUNT $PASSWORD > /dev/null 2>&1  &&  z_done  || { z_fail;	echo_red "	Error creating $ACCOUNT@$DOMAIN"; continue; }
+          echo "Login: $ACCOUNT@$DOMAIN Pass: $PASSWORD" >> $MAIL_BOXES
+          z_wait "Copy messages from $ACCOUNT@$DOMAIN"
+          $RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:/var/www/$USER/data/email/$DOMAIN/$ACCOUNT/.maildir/ /home/$USER/mail/$DOMAIN/$ACCOUNT  > /dev/null 2>&1 &&  z_done  || { z_fail; echo_red "	Error copy messages box $ACCOUNT@$DOMAIN"; continue;}
+          $CHOWN -R $USER:$USER /home/$USER/mail/$DOMAIN/$ACCOUNT
+      done < $MOVE_DIR/Email_Export
+  fi
+}
+MySQL_dump() {
+USER=$(echo $1)
+USERDB_ID=`cat $CFG_DIR/passwd |$PERL -n -e '/^'$USER':x:([\d]*):([\d]*)/ && print "$2\n"'`
+USER_BASES=`cat $ISP_DIR/etc/ispmgr.conf |$PERL -n -e '/^DbAssign "MySQL" ([\S]*) '$USERDB_ID'$/ && print "$1 "'`
+if [ -n "$USER_BASES" ]; then
+  rep "#----------------------------------------------------------------------"
+  rep "USER->'$USER' USERDB_ID->'$USERDB_ID'  USER_BASES->'$USER_BASES'"
+  rep "#----------------------------------------------------------------------"
+  echo -n "Copy databases ISPManager for user "; echo_bold "$USER"
+  for CUR_DB in $USER_BASES; do
+    CUR_DB=$(echo  $CUR_DB| xargs)
+    CUR_DB=${CUR_DB//' '/}
+    if [ -n "$CUR_DB" ]; then
+		echo_bold "Copy database $CUR_DB:"
+		MySQL_USER=`cat $ALL_GRANTS |grep $CUR_DB |sed "s/'//g" |$PERL -n -e '/^GRANT USAGE ON *.* TO (.*)\@localhost IDENTIFIED BY PASSWORD (.*);$/ && print "$1"'`
+		MD5=`cat $ALL_GRANTS |grep $CUR_DB |sed "s/'//g"  |$PERL -n -e '/^GRANT USAGE ON *.* TO (.*)\@localhost IDENTIFIED BY PASSWORD (.*);$/ && print "$2"'`
+		TMPDB=`echo $CUR_DB |sed 's/'$USER'\_//g' `
+		TMPUSER=`echo $MySQL_USER |sed 's/'$USER'\_//g' `
+		rep "#-DB $CUR_DB begin report"
+		rep "DB:'$CUR_DB';	MySQL user: '$MySQL_USER'; 	Passwd(MD5): '$MD5'"
+		rep "TMPDB: '$TMPDB'; TMPUSER: '$TMPUSER'"
+      	if [ "$TMPDB" != "$CUR_DB" -a "$TMPUSER" != "$USER" ]; then
+      	  # USER DATABASE DBUSER DBPASS [TYPE] [HOST] [CHARSET]
+      	  #echo "$VESTA/bin/v-add-database '$USER' '$TMPDB' '$TMPUSER' '$MD5' 'mysql' 'localhost'"
+
+      	  # echo "$VESTA/bin/v-add-database $USER $TMPDB $TMPUSER $MD5 mysql localhost"
+      	  $VESTA/bin/v-add-database "$USER" "$TMPDB" "$TMPUSER" "$MD5" 'mysql' 'localhost'
+      	  rep "DB '$CUR_DB' and user '$MySQL_USER' with PREFIX"
+      	else
+      	  rep "DB '$CUR_DB' and user '$MySQL_USER' NO PREFIX"
+      	fi
+	_dump="$CUR_DB.sql.gz"
+
+        echo "#!/bin/bash
+
+        mysqldump -u root -p$MySQL_Pass $CUR_DB| gzip >  /root/dump.sql.gz
+
+        " > $MOVE_DIR/MySQL_dump.sh
+
+        $RSH_OPTIONS $IP_SOURCE 'bash -s ' < $MOVE_DIR/MySQL_dump.sh
+        rep "dump $CUR_DB created successfully in remote servers"
+        z_wait "	Copy dump $CUR_DB from ISPmanager MySQL"
+        $RSYNC -ratlz --rsh="$RSH_OPTIONS" root@$IP_SOURCE:/root/dump.sql.gz $DUMP_DIR/$_dump
+        rep "dump $CUR_DB copy successfully from remote servers"; z_done
+        z_wait "	Create database $CUR_DB in MySQL VestaCP"
+        echo 'CREATE DATABASE IF NOT EXISTS `'$CUR_DB'` ;' |mysql -u "root" -p"$VESTA_DB_PASS" -N -B
+        rep "CREATE DATABASE $CUR_DB successfully in MySQL"
+        gunzip -f $DUMP_DIR/$_dump; sleep 1; z_done
+        z_wait "	Restore DB $CUR_DB from dump in MySQL VestaCP"
+		mysql -u "root" -p"$VESTA_DB_PASS" "$CUR_DB" < "$DUMP_DIR/$CUR_DB.sql" || { echo_red "Error in Database $CUR_DB ."; echo $?; rep $?; } && z_done
+        rep "dump $CUR_DB restore in MySQL successfully"
+        z_wait "	Restore users and PRIVILEGES in MySQL VestaCP"
+        rep "#----------------------------------------------------------------------"
+        #cat $ALL_GRANTS |grep $CUR_DB |sed 's/Grants for .*/#### &/' |sed 's/$/;/' |mysql -u root -p$VESTA_DB_PASS || { z_fail; echo $?;  exit 3; } && z_done
+        #cat $ALL_GRANTS |grep $CUR_DB |sed 's/Grants for .*/#### &/' |sed 's/$/;/' >> $REPORT
+        cat $ALL_GRANTS |grep "$CUR_DB" |mysql -u root -p$VESTA_DB_PASS || { z_fail; echo $?;  exit 0; } && z_done
+        rep "PRIVILEGES for $CUR_DB: $?"
+        rep "#----------------------------------------------------------------------"
+        if !([ "$TMPDB" != "$CUR_DB" ] && [ "$TMPUSER" != "$USER" ]); then
+		  TIME=$(date '+%T')
+		  DATE=$(date '+%Y-%m-%d')
+		  echo "DB='$CUR_DB' DBUSER='$MySQL_USER' MD5='*2BB322AF0EB0149340BA0DFCFF790B883BD3A3E2' HOST='localhost' TYPE='mysql' CHARSET='UTF8' U_DISK='0' SUSPENDED='no' TIME='$TIME' DATE='$DATE'"  >> $VESTA/data/users/$USER/db.conf
+        fi
+      fi
+    done
+    # :o) на всякий случай ставим точку ;о)
+    cat $ALL_GRANTS |grep $USER |mysql -u root -p$VESTA_DB_PASS|| { z_fail; echo $?;  exit 0; } && echo "*"
+fi
+}
+restore_users() {
+USERS=$(cat $ISP_CFG |sort  |perl -n -e '/Account "(.*)"/is && print "$1 "')
+if [[ -n "$USER_EXPORT" ]]; then
+  f=$(echo $USERS |grep -w "$USER_EXPORT")
+  if [ "$USER_EXPORT" = "all-enabled-users" ]; then
+    USER_EXPORT=$(cat $CFG_DIR/shadow |sort |awk -F':' '$2 ~ "\$" {print $1,$2}' |$PERL -n -e '/([\w+\d+\-]+)\s+\$(.*)$/ && print "$1 \n"')
+  elif [ "$USER_EXPORT" = "all-disabled-users" ]; then
+    USER_EXPORT=$(cat $CFG_DIR/shadow |sort |awk -F':' '$2 ~ "\$" {print $1,$2}' |$PERL -n -e '/([\w+\d+\-]+)\s+\*\$(.*)$/ && print "$1 \n"')
+  elif [[ -z "$f" ]] ; then
+    echo_red "ERROR! User $USER_EXPORT not found in server IP $IP_SOURCE:"; echo_bold "You can find the user in the list $USERS"; exit 0
+  fi
+  if  [[ -n "$USER_EXPORT" ]]; then
+  USER_TO_COPY=''
+  for USER in $USERS; do
+	P=$(echo $USER_EXPORT |grep -w $USER )
+        if  [ "$P" != "" ]; then
+		  T="$USER_TO_COPY $USER"
+		  USER_TO_COPY=$T
+        fi
+  done
+  USERS=$(echo $USER_TO_COPY)
+  fi
+fi
+echo "#-------------------------------------------------------------------#"
+echo "Users to copy:"$USERS
+echo "#-------------------------------------------------------------------#"
+
+for USER in $USERS; do
+  USER=$(echo $USER)
+  cat $ISP_CFG | grep -A 28 -E 'Account "'$USER'"' > $TMP
+  # IS_RESELLER=$(cat $TMP |grep -w 'UserLimit' |awk '{print $2}' )
+  if [[ -z $(cat $TMP |grep -w 'UserLimit' |awk '{print $2}' ) ]]; then
+	echo_bold "USER $USER START COPY FROM ISP to VestaCP.."
+	PACKAGE=`cat $TMP |grep -w "Preset" |awk '{print $2}' |xargs`
+    if [ "$PACKAGE" == "custom" -o  "$PACKAGE" != "" ]; then
+      PACKAGE="default"
+    fi
+    if [ -f "$ISP_DIR/var/userconf/ispmgr.$USER" ]; then
+      EMAIL=$($PERL -n -e '/^Email\s+(.*)$/ && print "$1\n"' $ISP_DIR/var/userconf/ispmgr.$USER)
+    fi
+	[ "$EMAIL" = '' ] && EMAIL='support@vps-server.ru'; rep "User $USER email not fount in ISPManager conf. Set $EMAIL" 
+	PASSWORD=$(date +%s | sha256sum | base64 | head -c 32 ; echo)
+	nice -19 $VESTA/bin/v-add-user $USER $PASSWORD $EMAIL $PACKAGE $FNAME $LNAME  >> $REPORT
+    echo "$USER $PASSWORD $EMAIL $PACKAGE $FNAME $LNAME" >> $USERSINFO
+    $RSYNC -ratlz --rsh="$RSH_OPTIONS" "root@$IP_SOURCE:/var/www/$USER/data/php-bin/php" $TMP > /dev/null 2>&1
+    PHP_VER=`cat $TMP |$PERL -ne '/(\w+\d+)$/ && print "$1"'`
+    if [ "$PHP_VER" == 'php-cgi' -o "$PHP_VER" == '' ]; then
+      PHP_VER=$DEFAULT_WEB_TEMPLATE
+    fi
+    # PASSWD_SHADOW_CUR=$(cat /etc/shadow |grep ^$USER: |awk -F':' '$2 ~ "\$" {print $2}')
+    # mv /etc/shadow /tmp/shadow.$USER
+    # $(cat /tmp/shadow.$USER | sed "s/'^$USER:$PASSWD_SHADOW_CUR'/'$USER:$PASSWD_SHADOW_OLD'/g" > /etc/shadow
+    # sed 's|^$USER:$PASSWD_SHADOW_CUR|$USER:$PASSWD_SHADOW_OLD|g' -i /etc/shadow
+    if [[ -z "$APACHE_CFG" ]]; then
+      USERID=`cat $CFG_DIR/passwd |$PERL -n -e '/^'$USER':x:([\d]*):([\d]*)/ && print "$1\n"'`
+      DOMAINS=$(cat $ISP_CFG | $PERL -n -e '/^Domain ([\S]*) '$USERID'$/i && print "$1\n"')
+    else
+      DOMAINS=$(cat $APACHE_CFG |grep -w "/var/www/$USER" |grep "Directory" |$PERL -n -e '/([\w\d\.\-\_]*)\>/ && print "$1 "')
+    fi
+	  for DOMAIN in $DOMAINS; do
+		DOMAIN=$(echo $DOMAIN)
+		echo -n "Domain $DOMAIN start copy"; z_time
+        if [[ -n "$APACHE_CFG" ]]; then
+			ALIASES=$(cat $APACHE_CFG | grep -w $DOMAIN | $PERL -n -e '/ServerAlias (.*)$/ && print "$1 "'|$SED  s/"www.$DOMAIN"// )
+			ALIASES=$(echo $ALIASES | $SED 's/^[ \t]*//')
+        fi
+        WEBDOMAIN=$(echo $(CHARSET='UTF-8' idn -u $DOMAIN)|tr '\n' ' '|xargs )
+	    # Usage: v-add-domain USER DOMAIN [IP] [RESTART]
+		nice -19 $VESTA/bin/v-add-domain $USER $WEBDOMAIN $IP
+		# [[ -n "$ALIASES" ]] && (echo "	ALIASES:" $(CHARSET='UTF-8' idn -u $ALIASES);)
+    	if [[ -n "$ALIASES" ]]; then
+			echo "ALIASES:" $(CHARSET='UTF-8' idn -u $ALIASES);
+			ALIASES=$(echo $(CHARSET='UTF-8' idn -u $ALIASES)|tr '\n' ' ')
+			# v-add-web-domain-alias USER DOMAIN DOM_ALIAS [RESTART]
+			nice -19 $VESTA/bin/v-add-web-domain-alias $USER $WEBDOMAIN $ALIASES 'no'
+    	fi
+    	if [[ -n "$NGINX_CFG" ]]; then
+          restore_dns_records $USER $DOMAIN $WEBDOMAIN
+          FILES=$(cat $NGINX_CFG |grep "/var/www/$USER/data/www/$DOMAIN" )
+    	  SSL=$(cat $NGINX_CFG |grep -A 40 "server_name $DOMAIN" |grep -w 'ssl_certificate' |$PERL -n -e '/([\S]*);/ && print "$1 "')
+    	  SSL_KEY=$(cat $NGINX_CFG |grep -A 40 "server_name $DOMAIN" |grep -w 'ssl_certificate_key ' |$PERL -n -e '/([\S]*);/ && print "$1 "')
+          if [[ -n "$FILES" ]]; then
+            echo -n "Copy files domain $WEBDOMAIN"; z_time
+            # Usage: v-change-web-domain-tpl USER DOMAIN TEMPLATE [RESTART]
+            nice -19 $VESTA/bin/v-change-web-domain-tpl $USER $WEBDOMAIN $PHP_VER
+            if [[ -n "$SSL" ]] && [[ -n "$SSL_KEY" ]]; then
+				echo "From: $IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/ ->"
+				z_wait "To: /home/$USER/web/$WEBDOMAIN/public_shtml"
+				rm -f /home/$USER/web/$WEBDOMAIN/public_shtml/index.html
+				$RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/ /home/$USER/web/$WEBDOMAIN/public_shtml  > /dev/null 2>&1  &&  z_done  || { z_fail;	echo_red "	Error in source path $IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/"; continue; }
+				z_wait "	SSL Sertificate copy start"
+				$RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:$SSL $SSL_DIR/
+				$RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:$SSL_KEY $SSL_DIR/
+				chmod 0600 $SSL_DIR/*
+				crt=`basename "$SSL"`
+				key=`basename "$SSL_KEY"`
+				mv $SSL_DIR/$crt "$SSL_DIR/$DOMAIN.crt"
+				mv $SSL_DIR/$key "$SSL_DIR/$DOMAIN.key"
+				nice -19 $VESTA/bin/v-add-web-domain-ssl $USER $WEBDOMAIN $SSL_DIR 'single' 'no'
+				$CHOWN -R $USER:$USER /home/$USER/web/$WEBDOMAIN/public_shtml/
+            else
+              rm -f /home/$USER/web/$WEBDOMAIN/public_html/index.html
+              echo "From: $IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/ ->"
+              z_wait "To: /home/$USER/web/$WEBDOMAIN/public_html"
+              $RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/ /home/$USER/web/$WEBDOMAIN/public_html > /dev/null 2>&1  && z_done || { z_fail; echo_red "	Error in source path $IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/"; continue; }
+              $CHOWN -R $USER:$USER /home/$USER/web/$WEBDOMAIN/public_html/
+            fi
+          fi
+		  echo "$IP $DOMAIN" >> $HOSTSADD
+		fi
+		echo_bold "$DOMAIN complete"
+		done
+	MySQL_dump $USER
+	Email_Export $USER
+    echo_bold "User $USER IS COMPLETE!"
+  fi
+done
+}
+restore_dns_records(){
+  z_wait "Restore dns $WEBDOMAIN"
+  USER=$(echo $1)
+  DOMAIN=$(echo $2)
+  WEBDOMAIN=$(echo $3)
+  BIND_FILE=`cat $NAMED_CFG |$PERL -n -e '/file "(\/.*\/'$DOMAIN')";$/ &&  print "$1\n"'`
+  if [[ -n "$BIND_FILE" ]]; then
+    $RSYNC -ratlz --rsh="$RSH_OPTIONS" root@$IP_SOURCE:$BIND_FILE "$CFG_DIR/$DOMAIN.dns"
+    if [ -f $CFG_DIR/$DOMAIN.dns ];then
+      MX_RECS=`cat $CFG_DIR/$DOMAIN.dns |$PERL -n -e '/\s+IN\s+MX\s+(\d{1,2})\s(.*)$/  && xargs && print "$1:$2\n"'` #
+      A_RECS=`cat $CFG_DIR/$DOMAIN.dns |$PERL -n -e '/([\w+\d+\.\-]*)\s+IN\s+A\s+([\w+\d+\.]*)$/  && print "$1:$2\n"'`
+      CNAME_RECS=`cat $CFG_DIR/$DOMAIN.dns |$PERL -n -e '/([\w+\d+\.\-]*)\s+IN\s+CNAME\s+([\w+\d+\.]*)$/ && print "$1:$2\n"'`
+      TXT_RECS=`cat $CFG_DIR/$DOMAIN.dns |$PERL -n -e '/([\w+\d+\.\-]*)\s+IN\s+TXT\s+(.*)$/ && print "$1|$2\n"'`
+      PTR_RECS=`cat $CFG_DIR/$DOMAIN.dns |$PERL -n -e '/([\w+\d+\.\-]*)\s+IN\s+PTR\s+(.*)$/ && print "$1|$2\n"'`
+      if [[ -n "$MX_RECS" ]]; then
+        DRECS=`$VESTA/bin/v-list-dns-records $USER $WEBDOMAIN |grep " MX " |awk  '{print $1}'`
+        for MX_REC in $MX_RECS; do
+            VALUE=`echo $MX_REC |sed 's/:/ /g' |awk '{print $2}'`
+            PRIORITY=`echo $MX_REC |sed 's/:/ /g' |awk '{print $1}'`
+            if [ "`echo $VALUE |grep -v '\.'`" != '' ]; then
+              VALUE="$VALUE.$DOMAIN."
+            fi
+            $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" @ MX "$VALUE" "$PRIORITY"
+            rep "$VESTA/bin/v-add-dns-record $USER $WEBDOMAIN @ MX $VALUE $PRIORITY"
+        done
+        for DEF_REC in $DRECS; do
+          $VESTA/bin/v-delete-dns-record $USER $WEBDOMAIN $DEF_REC
+        done
+      fi
+      if [[ -n "$A_RECS" ]]; then
+        DRECS=`$VESTA/bin/v-list-dns-records $USER $WEBDOMAIN |grep " A " |awk  '{print $1}'`
+        for A_REC in $A_RECS; do
+          VALUE=$(echo $A_REC |$PERL -n -e '/([\w\d\.\-\_]*)$/ && print "$1"')
+          RECORD=$(echo $A_REC |$PERL  -n -e '/^([\w\d\.\-\_]*)/ && print "$1"')
+          if [ "`echo $ALL_SOURCE_IPS |grep -w $VALUE`" != '' ]; then
+              VALUE="$IP"
+          fi
+          $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" A "$VALUE"
+          rep "$VESTA/bin/v-add-dns-record $USER $WEBDOMAIN $RECORD A $VALUE"
+        done
+        for DEF_REC in $DRECS; do
+          $VESTA/bin/v-delete-dns-record $USER $WEBDOMAIN $DEF_REC
+        done
+      fi
+      if [[ -n "$CNAME_RECS" ]]; then
+        DRECS=`$VESTA/bin/v-list-dns-records $USER $DOMAIN |grep " CNAME " |awk  '{print $1}'`
+        for CNAME_REC in $CNAME_RECS; do
+          VALUE=`echo $CNAME_REC |sed 's/:/ /g'|awk '{print $2}'`
+          RECORD=`echo $CNAME_REC |sed 's/:/ /g' |awk '{print $1}'`
+          FULL_REC=`expr "$RECORD" : '.*\('$DOMAIN'\)'`
+          if [ "$FULL_REC" = '' ]; then
+            $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" CNAME "$VALUE"
+          else
+            $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" CNAME "$VALUE"
+          fi
+          rep "$VESTA/bin/v-add-dns-record $USER $WEBDOMAIN $RECORD CNAME $VALUE"
+        done
+        for DEF_REC in $DRECS; do
+          $VESTA/bin/v-delete-dns-record $USER $WEBDOMAIN $DEF_REC
+        done
+      fi
+      if [[ -n "$TXT_RECS" ]]; then
+        DRECS=`$VESTA/bin/v-list-dns-records $USER $WEBDOMAIN |grep " TXT " |awk  '{print $1}'`
+        echo "$TXT_RECS" > $TMP
+        while read REC; do
+          VALUE=`echo $REC |egrep -o '[^|]+$'`
+          RECORD=`echo $REC |egrep -o '^[^|]+'`
+          # Usage: v-add-dns-record USER DOMAIN RECORD TYPE VALUE [PRIORITY] [ID] [RESTART]
+          $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" TXT "$VALUE"
+          rep "$VESTA/bin/v-add-dns-record $USER $WEBDOMAIN $RECORD TXT $VALUE"
+        done < $TMP
+        for DEF_REC in $DRECS; do
+          $VESTA/bin/v-delete-dns-record $USER $WEBDOMAIN $DEF_REC
+        done
+      fi
+      if [[ -n "$PTR_RECS" ]]; then
+        echo "$PTR_RECS" > $TMP
+        while read REC; do
+          VALUE=`echo $REC |egrep -o '[^|]+$'`
+          RECORD=`echo $REC |egrep -o '^[^|]+'`
+          # Usage: v-add-dns-record USER DOMAIN RECORD TYPE VALUE [PRIORITY] [ID] [RESTART]
+          $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" PTR "$VALUE"
+          rep "$VESTA/bin/v-add-dns-record $USER $WEBDOMAIN $RECORD PTR $VALUE"
+        done < $TMP
+      fi
+    fi
+  fi
+  z_done
+}
+#-
+export VESTA="/usr/local/vesta"; echo `date "+%d-%m-%Y %H:%M:%S"` > $REPORT; clear; 
+echo "#-------------------------------------------------------------------#"
+echo -n "# $v"; z_time 
+echo "#-------------------------------------------------------------------#" 
+RSH_OPTIONS="$SSHPASS -p $PASSWD_SOURCE ssh -o StrictHostKeyChecking=no -l root"
+z_wait "Copy ISPmanager configs from server $IP_SOURCE"
+$RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:/usr/local/ispmgr /root/move/ > /dev/null 2>&1 && z_done || { echo_red "Error connect to $IP_SOURCE data loss OR ISPManager 4 config files not found! Exit."; exit 1; }
+z_wait "Copy /etc/passwd from server $IP_SOURCE"
+$RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:/etc/passwd  $CFG_DIR  > /dev/null 2>&1  && z_done || { echo_red "Error copy file /etc/passwd from server $IP_SOURCE"; }
+z_wait "Copy /etc/shadow from server $IP_SOURCE"
+$RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:/etc/shadow  $CFG_DIR  > /dev/null 2>&1  && z_done || { echo_red "Error copy file /etc/shadow from server $IP_SOURCE"; }
+ISP_APACHE_CFG=`cat $ISP_DIR/etc/ispmgr.conf |grep "path httpd.conf" |awk '{print $3}'`
+if [[ -n "$ISP_APACHE_CFG" ]]; then
+	APACHE_CFG=`basename $ISP_APACHE_CFG`
+	APACHE_CFG=$CFG_DIR/$APACHE_CFG
+	z_wait "Copy APACHE config from server $IP_SOURCE"
+	$RSYNC $RO --rsh="$RSH_OPTIONS" root@$IP_SOURCE:$ISP_APACHE_CFG $APACHE_CFG  > /dev/null 2>&1  && z_done || { echo_red "Error copy file $CFG_DIR/$APACHE_CFG from server $IP_SOURCE"; exit 1; }
+fi
+ISP_NAMED_CFG=`cat $ISP_DIR/etc/ispmgr.conf |grep "path named.conf" |awk '{print $3}'`
+if [[ -n "$ISP_NAMED_CFG" ]]; then
+	NAMED_CFG=`basename $ISP_NAMED_CFG`
+	NAMED_CFG=$CFG_DIR/$NAMED_CFG
+	z_wait "Copy NAMED config from server $IP_SOURCE"
+	$RSYNC -ratlz --rsh="$RSH_OPTIONS" root@$IP_SOURCE:$ISP_NAMED_CFG $NAMED_CFG  > /dev/null 2>&1  && z_done || { echo_red "Error copy file $CFG_DIR/$NAMED_CFG from server $IP_SOURCE"; exit 1; }
+fi
+ISP_NGINX_CFG=`cat $ISP_DIR/etc/ispmgr.conf |grep "path nginx.conf" |awk '{print $3}'`
+if [[ -n "$ISP_NGINX_CFG" ]]; then
+	NGINX_CFG=$CFG_DIR/`basename $ISP_NGINX_CFG`
+	z_wait "Copy NGINX config from server $IP_SOURCE"
+	$RSYNC -ratlz --rsh="$RSH_OPTIONS" root@$IP_SOURCE:$ISP_NGINX_CFG $NGINX_CFG  > /dev/null 2>&1  && z_done || { echo_red "Error copy file $CFG_DIR/$NGINX_CFG from server $IP_SOURCE"; exit 1; }
+  else
+	z_fail
+	echo_red "NGINX not installed in source server $IP_SOURCE"
+	echo_red "This configs not supported now! Exit."
+	exit 1
+fi
+MySQL_Pass=`cat $ISP_DIR/etc/ispmgr.conf |$PERL -n -e '/[\s]Password ([\S]*)/ && print "$1 "'`
+if [[ -n "$MySQL_Pass" ]]; then
+  cat > $MOVE_DIR/get_grants.sh <<EOM
+#!/bin/bash
+# NEW version
+mygrants()
+{
+mysql -B -N $@ -e "SELECT DISTINCT CONCAT(
+  'SHOW GRANTS FOR \'', user, '\'@\'', host, '\';'
+  ) AS query FROM mysql.user" | \
+mysql $@ | \
+sed 's/\(GRANT .*\)/\1;/;s/^\(Grants for .*\)/## \1 ##/;/##/{x;p;x;}'
+}
+# mygrants --host=localhost --user=root --password=$MySQL_Pass > $ALL_GRANTS
+
+# OLD version
+mysql -u root -p$MySQL_Pass -B -N -e "SELECT DISTINCT CONCAT('SHOW GRANTS FOR ''',user,'''@''',host,''';') AS query FROM mysql.user" | \
+mysql -u root -p$MySQL_Pass | \
+sed 's/\(GRANT .*\)/\1;/;s/^\(Grants for .*\)/## \1 ##/;/##/{x;p;x;}' > $ALL_GRANTS
+
+EOM
+	z_wait "Copy MySQL GRANTS from $IP_SOURCE"
+	$RSH_OPTIONS $IP_SOURCE 'bash -s ' < $MOVE_DIR/get_grants.sh
+	$RSYNC -ratlz --rsh="$RSH_OPTIONS" root@$IP_SOURCE:$ALL_GRANTS $ALL_GRANTS  > /dev/null 2>&1  && z_done || { echo_red "Error copy MySQL GRANTS from $IP_SOURCE"; exit 1; }
+	$PERL -pi -e 's/\\_/_/g' $ALL_GRANTS; $PERL -pi -e 's/\\_/_/g' $ALL_GRANTS
+	$PERL -pi -e "s/$IP_SOURCE/localhost/g" $ALL_GRANTS
+else
+	z_fail; echo_red "MySQL passwd not found in source server $IP_SOURCE"
+fi
+ALL_SOURCE_IPS=`$CAT $ISP_CFG |egrep "^ip\s+" |$AWK '{print $2}' |sort |uniq`
+VESTA_DB_PASS=`cat /root/.my.cnf |$PERL -n -e '/password=(.*)/ && print "$1"' |tr -d "'"`
+z_wait "Restore templates from ISPManager to VestaCP"; restore_templates; z_done
+echo_bold "#-------------------------------------------------------------------#"
+echo -n "Start copying users from ISPManager"; z_time; restore_users
+echo_bold "#-------------------------------------------------------------------#"
+echo_green "Copying has been completed!"
+echo_bold "Error report file is $REPORT"
+echo_bold "User info in file  $USERSINFO"
+echo_bold "All email boxes and passwords you can find in file $MAIL_BOXES"
+echo_bold "All domains for add in /etc/hosts for Linux"
+echo_bold "Or C:\Windows\System32\drivers\etc\hosts for Win-must-die"
+echo_bold "You can find in file $HOSTSADD"
+echo_bold "#-------------------------------------------------------------------#"
+exit 0
