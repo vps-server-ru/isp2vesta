@@ -1,9 +1,9 @@
 #!/bin/bash
 
-DEFAULT_WEB_TEMPLATE='php54'
+DEFAULT_WEB_TEMPLATE='phpcgi'
 
 [ "$(whoami)" != 'root' ] && ( echo "У вас нет прав для запуска!";  exit 0 )
-v='isp2vesta 0.59 Beta VPS-server.ru edition :o)'
+v='isp2vesta 0.61 Beta VPS-server.ru edition :o)'
 usage() {
     cat <<EOM
 
@@ -254,7 +254,7 @@ if [ -n "$USER_BASES" ]; then
       	else
       	  rep "DB '$CUR_DB' and user '$MySQL_USER' NO PREFIX"
       	fi
-	_dump="$CUR_DB.sql.gz"
+		_dump="$CUR_DB.sql.gz"
 
         echo "#!/bin/bash
 
@@ -330,9 +330,12 @@ for USER in $USERS; do
       PACKAGE="default"
     fi
     if [ -f "$ISP_DIR/var/userconf/ispmgr.$USER" ]; then
-      EMAIL=$($PERL -n -e '/^Email\s+(.*)$/ && print "$1\n"' $ISP_DIR/var/userconf/ispmgr.$USER)
+    	EMAIL=$($PERL -n -e '/^Email\s+(.*)$/ && print "$1\n"' $ISP_DIR/var/userconf/ispmgr.$USER)
+		if [[ -z "$EMAIL" ]]; then 
+			EMAIL='support@vps-server.ru'
+		fi
     fi
-	[ "$EMAIL" = '' ] && EMAIL='support@vps-server.ru'; rep "User $USER email not fount in ISPManager conf. Set $EMAIL" 
+	rep "User $USER set email $EMAIL" 
 	PASSWORD=$(date +%s | sha256sum | base64 | head -c 32 ; echo)
 	nice -19 $VESTA/bin/v-add-user $USER $PASSWORD $EMAIL $PACKAGE $FNAME $LNAME  >> $REPORT
     echo "$USER $PASSWORD $EMAIL $PACKAGE $FNAME $LNAME" >> $USERSINFO
@@ -351,18 +354,17 @@ for USER in $USERS; do
     else
       DOMAINS=$(cat $APACHE_CFG |grep -w "/var/www/$USER" |grep "Directory" |$PERL -n -e '/([\w\d\.\-\_]*)\>/ && print "$1 "')
     fi
-	  for DOMAIN in $DOMAINS; do
-		DOMAIN=${DOMAIN//'*'/'wildcard'}
-		DOMAIN=${DOMAIN//' '/}
+	for DOMAIN in $DOMAINS; do
+		DOMAIN=$(echo $DOMAIN |$PERL  -n -e '/([\*\.]*|)(.*)$/ && print "$2 "'|xargs )
 		echo -n "Domain $DOMAIN start copy"; z_time
         if [[ -n "$APACHE_CFG" ]]; then
-			ALIASES=$(cat $APACHE_CFG | grep -w $DOMAIN | $PERL -n -e '/ServerAlias (.*)$/ && print "$1 "'|$SED  s/"www.$DOMAIN"// )
-			ALIASES=$(echo $ALIASES | $SED 's/^[ \t]*//')
+			ALIASES=$(cat $APACHE_CFG |grep -w $DOMAIN |$PERL -n -e '/ServerAlias (.*)$/ && print "$1 "'|$SED  s/"www.$DOMAIN"// )
+			ALIASES=$(echo $ALIASES |$SED 's/^[ \t]*//')
         fi
         WEBDOMAIN=$(echo $(CHARSET='UTF-8' idn -u $DOMAIN)|tr '\n' ' '|xargs )
-	    # Usage: v-add-domain USER DOMAIN [IP] [RESTART]
-		nice -19 $VESTA/bin/v-add-domain $USER $WEBDOMAIN $IP
-		# [[ -n "$ALIASES" ]] && (echo "	ALIASES:" $(CHARSET='UTF-8' idn -u $ALIASES);)
+	# Usage: v-add-domain USER DOMAIN [IP] [RESTART]
+	nice -19 $VESTA/bin/v-add-domain $USER $WEBDOMAIN $IP
+	# [[ -n "$ALIASES" ]] && (echo "	ALIASES:" $(CHARSET='UTF-8' idn -u $ALIASES);)
     	if [[ -n "$ALIASES" ]]; then
 			echo "ALIASES:" $(CHARSET='UTF-8' idn -u $ALIASES);
 			ALIASES=$(echo $(CHARSET='UTF-8' idn -u $ALIASES)|tr '\n' ' ')
@@ -433,7 +435,7 @@ restore_dns_records(){
             if [ "`echo $VALUE |grep -v '\.'`" != '' ]; then
               VALUE="$VALUE.$DOMAIN."
             fi
-            $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" @ MX "$VALUE" "$PRIORITY"
+            $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" @ MX "$VALUE" "$PRIORITY" > /dev/null 2>&1
             rep "$VESTA/bin/v-add-dns-record $USER $WEBDOMAIN @ MX $VALUE $PRIORITY"
         done
         for DEF_REC in $DRECS; do
@@ -448,7 +450,7 @@ restore_dns_records(){
           if [ "`echo $ALL_SOURCE_IPS |grep -w $VALUE`" != '' ]; then
               VALUE="$IP"
           fi
-          $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" A "$VALUE"
+          $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" A "$VALUE" > /dev/null 2>&1
           rep "$VESTA/bin/v-add-dns-record $USER $WEBDOMAIN $RECORD A $VALUE"
         done
         for DEF_REC in $DRECS; do
@@ -462,9 +464,9 @@ restore_dns_records(){
           RECORD=`echo $CNAME_REC |sed 's/:/ /g' |awk '{print $1}'`
           FULL_REC=`expr "$RECORD" : '.*\('$DOMAIN'\)'`
           if [ "$FULL_REC" = '' ]; then
-            $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" CNAME "$VALUE"
+            $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" CNAME "$VALUE" > /dev/null 2>&1
           else
-            $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" CNAME "$VALUE"
+            $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" CNAME "$VALUE" > /dev/null 2>&1
           fi
           rep "$VESTA/bin/v-add-dns-record $USER $WEBDOMAIN $RECORD CNAME $VALUE"
         done
@@ -478,12 +480,11 @@ restore_dns_records(){
         while read REC; do
           VALUE=`echo $REC |egrep -o '[^|]+$'`
           RECORD=`echo $REC |egrep -o '^[^|]+'`
-          # Usage: v-add-dns-record USER DOMAIN RECORD TYPE VALUE [PRIORITY] [ID] [RESTART]
-          $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" TXT "$VALUE"
+          $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" TXT "$VALUE" > /dev/null 2>&1
           rep "$VESTA/bin/v-add-dns-record $USER $WEBDOMAIN $RECORD TXT $VALUE"
         done < $TMP
         for DEF_REC in $DRECS; do
-          $VESTA/bin/v-delete-dns-record $USER $WEBDOMAIN $DEF_REC
+          $VESTA/bin/v-delete-dns-record $USER $WEBDOMAIN $DEF_REC > /dev/null 2>&1
         done
       fi
       if [[ -n "$PTR_RECS" ]]; then
@@ -491,8 +492,7 @@ restore_dns_records(){
         while read REC; do
           VALUE=`echo $REC |egrep -o '[^|]+$'`
           RECORD=`echo $REC |egrep -o '^[^|]+'`
-          # Usage: v-add-dns-record USER DOMAIN RECORD TYPE VALUE [PRIORITY] [ID] [RESTART]
-          $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" PTR "$VALUE"
+          $VESTA/bin/v-add-dns-record $USER "$WEBDOMAIN" "$RECORD" PTR "$VALUE" > /dev/null 2>&1
           rep "$VESTA/bin/v-add-dns-record $USER $WEBDOMAIN $RECORD PTR $VALUE"
         done < $TMP
       fi
