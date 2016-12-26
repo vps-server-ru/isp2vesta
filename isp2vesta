@@ -352,7 +352,8 @@ for USER in $USERS; do
       DOMAINS=$(cat $APACHE_CFG |grep -w "/var/www/$USER" |grep "Directory" |$PERL -n -e '/([\w\d\.\-\_]*)\>/ && print "$1 "')
     fi
 	  for DOMAIN in $DOMAINS; do
-		DOMAIN=$(echo $DOMAIN)
+		DOMAIN=${DOMAIN//'*'/'wildcard'}
+		DOMAIN=${DOMAIN//' '/}
 		echo -n "Domain $DOMAIN start copy"; z_time
         if [[ -n "$APACHE_CFG" ]]; then
 			ALIASES=$(cat $APACHE_CFG | grep -w $DOMAIN | $PERL -n -e '/ServerAlias (.*)$/ && print "$1 "'|$SED  s/"www.$DOMAIN"// )
