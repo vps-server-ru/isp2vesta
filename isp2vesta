@@ -3,7 +3,7 @@
 DEFAULT_WEB_TEMPLATE='phpcgi'
 
 [ "$(whoami)" != 'root' ] && ( echo "У вас нет прав для запуска!";  exit 0 )
-v='isp2vesta 0.61 Beta VPS-server.ru edition :o)'
+v='isp2vesta 0.63 Beta VPS-server.ru edition :o)'
 usage() {
     cat <<EOM
 
@@ -322,8 +322,8 @@ for USER in $USERS; do
 	if (( "$_l" > "60" ));then
 	 echo $_s >> $TMP; _s=""
 	fi
-done
-echo_bold "Found ($i) users in ISPManager to migrate in VestaCP:"; cat $TMP
+done; [ -n "$_s" ] && echo $_s >> $TMP;
+echo "Found ($i) users in ISPManager to migrate in VestaCP:"; cat $TMP
 echo "#-------------------------------------------------------------------#"
 for USER in $USERS; do
   USER=$(echo $USER |xargs )
@@ -411,11 +411,12 @@ for USER in $USERS; do
           fi
 		  echo "$IP $DOMAIN" >> $HOSTSADD
 		fi
-		echo_bold "$DOMAIN complete"
+		echo -n "$DOMAIN files transfer complete";z_time
 		done
 	MySQL_dump $USER
 	Email_Export $USER
-    echo_bold "User $USER IS COMPLETE!"
+    echo -n "User $USER is complete";z_time
+	echo "#-------------------------------------------------------------------#"
   fi
 done
 }
@@ -445,7 +446,7 @@ restore_dns_records(){
             rep "$VESTA/bin/v-add-dns-record $USER $WEBDOMAIN @ MX $VALUE $PRIORITY"
         done
         for DEF_REC in $DRECS; do
-          $VESTA/bin/v-delete-dns-record $USER $WEBDOMAIN $DEF_REC
+          $VESTA/bin/v-delete-dns-record $USER $WEBDOMAIN $DEF_REC  > /dev/null 2>&1
         done
       fi
       if [[ -n "$A_RECS" ]]; then
@@ -460,7 +461,7 @@ restore_dns_records(){
           rep "$VESTA/bin/v-add-dns-record $USER $WEBDOMAIN $RECORD A $VALUE"
         done
         for DEF_REC in $DRECS; do
-          $VESTA/bin/v-delete-dns-record $USER $WEBDOMAIN $DEF_REC
+          $VESTA/bin/v-delete-dns-record $USER $WEBDOMAIN $DEF_REC  > /dev/null 2>&1
         done
       fi
       if [[ -n "$CNAME_RECS" ]]; then
@@ -477,7 +478,7 @@ restore_dns_records(){
           rep "$VESTA/bin/v-add-dns-record $USER $WEBDOMAIN $RECORD CNAME $VALUE"
         done
         for DEF_REC in $DRECS; do
-          $VESTA/bin/v-delete-dns-record $USER $WEBDOMAIN $DEF_REC
+          $VESTA/bin/v-delete-dns-record $USER $WEBDOMAIN $DEF_REC  > /dev/null 2>&1
         done
       fi
       if [[ -n "$TXT_RECS" ]]; then
