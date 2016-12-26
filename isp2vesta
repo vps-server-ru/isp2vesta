@@ -316,11 +316,17 @@ if [[ -n "$USER_EXPORT" ]]; then
   fi
 fi
 echo "#-------------------------------------------------------------------#"
-echo "Users to copy:"$USERS
-echo "#-------------------------------------------------------------------#"
-
+rm -f $TMP;
 for USER in $USERS; do
-  USER=$(echo $USER)
+	_s="$_s $USER";_l=$(echo ${#_s});((i++))
+	if (( "$_l" > "60" ));then
+	 echo $_s >> $TMP; _s=""
+	fi
+done
+echo_bold "Found ($i) users in ISPManager to migrate in VestaCP:"; cat $TMP
+echo "#-------------------------------------------------------------------#"
+for USER in $USERS; do
+  USER=$(echo $USER |xargs )
   cat $ISP_CFG | grep -A 28 -E 'Account "'$USER'"' > $TMP
   # IS_RESELLER=$(cat $TMP |grep -w 'UserLimit' |awk '{print $2}' )
   if [[ -z $(cat $TMP |grep -w 'UserLimit' |awk '{print $2}' ) ]]; then
@@ -497,6 +503,8 @@ restore_dns_records(){
         done < $TMP
       fi
     fi
+  else
+	rep "USER $USER is reseller not copy it!"
   fi
   z_done
 }
