@@ -3,7 +3,7 @@
 DEFAULT_WEB_TEMPLATE='phpcgi'
 
 [ "$(whoami)" != 'root' ] && ( echo "У вас нет прав для запуска!";  exit 0 )
-v='isp2vesta 0.63 Beta VPS-server.ru edition :o)'
+v='isp2vesta 0.64 Beta VPS-server.ru edition :o)'
 usage() {
     cat <<EOM
 
@@ -314,6 +314,8 @@ if [[ -n "$USER_EXPORT" ]]; then
   done
   USERS=$(echo $USER_TO_COPY)
   fi
+else
+	echo "Users not found in $IP_SOURCE!"; exit 0
 fi
 echo "#-------------------------------------------------------------------#"
 rm -f $TMP;
