@@ -1,9 +1,11 @@
 #!/bin/bash
 
 DEFAULT_WEB_TEMPLATE='phpcgi'
+DEFAULT_PACKAGE='dns'
+DEFAULT_USER_EMAIL='support@vps-server.ru'
 
 [ "$(whoami)" != 'root' ] && ( echo "У вас нет прав для запуска!";  exit 0 )
-v='isp2vesta 0.64 Beta VPS-server.ru edition :o)'
+v='isp2vesta 0.66 Beta VPS-server.ru edition :o)'
 usage() {
     cat <<EOM
 
@@ -329,24 +331,24 @@ echo "Found ($i) users in ISPManager to migrate in VestaCP:"; cat $TMP
 echo "#-------------------------------------------------------------------#"
 for USER in $USERS; do
   USER=$(echo $USER |xargs )
-  cat $ISP_CFG | grep -A 28 -E 'Account "'$USER'"' > $TMP
-  # IS_RESELLER=$(cat $TMP |grep -w 'UserLimit' |awk '{print $2}' )
+  $AWK '/Account "'$USER'" {/,/}/'  $ISP_CFG > $TMP
   if [[ -z $(cat $TMP |grep -w 'UserLimit' |awk '{print $2}' ) ]]; then
-	echo_bold "USER $USER START COPY FROM ISP to VestaCP.."
-	PACKAGE=`cat $TMP |grep -w "Preset" |awk '{print $2}' |xargs`
-    if [ "$PACKAGE" == "custom" -o  "$PACKAGE" != "" ]; then
-      PACKAGE="default"
+    echo_bold "USER $USER START COPY FROM ISP to VestaCP.."
+    PACKAGE=`cat $TMP |grep -w "Preset" |awk '{print $2}' |xargs`
+    if [ "$PACKAGE" == "custom" -o  "$PACKAGE" == "" ]; then
+      PACKAGE=$DEFAULT_PACKAGE
     fi
     if [ -f "$ISP_DIR/var/userconf/ispmgr.$USER" ]; then
     	EMAIL=$($PERL -n -e '/^Email\s+(.*)$/ && print "$1\n"' $ISP_DIR/var/userconf/ispmgr.$USER)
-		if [[ -z "$EMAIL" ]]; then 
-			EMAIL='support@vps-server.ru'
+		if [[ -z "$EMAIL" ]]; then
+			EMAIL=$DEFAULT_USER_EMAIL
 		fi
     fi
-	rep "User $USER set email $EMAIL" 
+	rep "User $USER set email $EMAIL"
 	PASSWORD=$(date +%s | sha256sum | base64 | head -c 32 ; echo)
 	nice -19 $VESTA/bin/v-add-user $USER $PASSWORD $EMAIL $PACKAGE $FNAME $LNAME  >> $REPORT
     echo "$USER $PASSWORD $EMAIL $PACKAGE $FNAME $LNAME" >> $USERSINFO
+    echo "$USER package is:$PACKAGE; email:$EMAIL"
     $RSYNC -ratlz --rsh="$RSH_OPTIONS" "root@$IP_SOURCE:/var/www/$USER/data/php-bin/php" $TMP > /dev/null 2>&1
     PHP_VER=`cat $TMP |$PERL -ne '/(\w+\d+)$/ && print "$1"'`
     if [ "$PHP_VER" == 'php-cgi' -o "$PHP_VER" == '' ]; then
