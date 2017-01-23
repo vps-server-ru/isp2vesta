@@ -1,11 +1,11 @@
 #!/bin/bash
+v='isp2vesta 0.68 Beta VPS-server.ru edition :o)'
 
-DEFAULT_WEB_TEMPLATE='phpcgi'
-DEFAULT_PACKAGE='dns'
+DEFAULT_WEB_TEMPLATE='php54'
+DEFAULT_PACKAGE='default'
 DEFAULT_USER_EMAIL='support@vps-server.ru'
 
 [ "$(whoami)" != 'root' ] && ( echo "У вас нет прав для запуска!";  exit 0 )
-v='isp2vesta 0.66 Beta VPS-server.ru edition :o)'
 usage() {
     cat <<EOM
 
@@ -280,7 +280,8 @@ if [ -n "$USER_BASES" ]; then
         rep "#----------------------------------------------------------------------"
         #cat $ALL_GRANTS |grep $CUR_DB |sed 's/Grants for .*/#### &/' |sed 's/$/;/' |mysql -u root -p$VESTA_DB_PASS || { z_fail; echo $?;  exit 3; } && z_done
         #cat $ALL_GRANTS |grep $CUR_DB |sed 's/Grants for .*/#### &/' |sed 's/$/;/' >> $REPORT
-        cat $ALL_GRANTS |grep "$CUR_DB" |mysql -u root -p$VESTA_DB_PASS || { z_fail; echo $?;  exit 0; } && z_done
+        MY_LUSER=$(cat $ALL_GRANTS | sed "s/[';\`]//g" | grep "$CUR_DB" | perl -n -e '/([\w\d\_\-]*)@/is && print "$1"')
+        cat $ALL_GRANTS |grep -E "$CUR_DB|$MY_LUSER" |mysql -u root -p$VESTA_DB_PASS || { z_fail; echo $?;  exit 0; } && z_done
         rep "PRIVILEGES for $CUR_DB: $?"
         rep "#----------------------------------------------------------------------"
         if !([ "$TMPDB" != "$CUR_DB" ] && [ "$TMPUSER" != "$USER" ]); then
@@ -296,6 +297,9 @@ fi
 }
 restore_users() {
 USERS=$(cat $ISP_CFG |sort  |perl -n -e '/Account "(.*)"/is && print "$1 "')
+if [[ -z "$USERS" ]]; then
+	echo "Users not found in $IP_SOURCE!"; exit 0
+fi
 if [[ -n "$USER_EXPORT" ]]; then
   f=$(echo $USERS |grep -w "$USER_EXPORT")
   if [ "$USER_EXPORT" = "all-enabled-users" ]; then
@@ -316,8 +320,6 @@ if [[ -n "$USER_EXPORT" ]]; then
   done
   USERS=$(echo $USER_TO_COPY)
   fi
-else
-	echo "Users not found in $IP_SOURCE!"; exit 0
 fi
 echo "#-------------------------------------------------------------------#"
 rm -f $TMP;
@@ -333,7 +335,7 @@ for USER in $USERS; do
   USER=$(echo $USER |xargs )
   $AWK '/Account "'$USER'" {/,/}/'  $ISP_CFG > $TMP
   if [[ -z $(cat $TMP |grep -w 'UserLimit' |awk '{print $2}' ) ]]; then
-    echo_bold "USER $USER START COPY FROM ISP to VestaCP.."
+    echo -n "User $USER start copy from ISPmanager to VestaCP "; z_time
     PACKAGE=`cat $TMP |grep -w "Preset" |awk '{print $2}' |xargs`
     if [ "$PACKAGE" == "custom" -o  "$PACKAGE" == "" ]; then
       PACKAGE=$DEFAULT_PACKAGE
@@ -372,9 +374,9 @@ for USER in $USERS; do
 			ALIASES=$(echo $ALIASES |$SED 's/^[ \t]*//')
         fi
         WEBDOMAIN=$(echo $(CHARSET='UTF-8' idn -u $DOMAIN)|tr '\n' ' '|xargs )
-	# Usage: v-add-domain USER DOMAIN [IP] [RESTART]
-	nice -19 $VESTA/bin/v-add-domain $USER $WEBDOMAIN $IP
-	# [[ -n "$ALIASES" ]] && (echo "	ALIASES:" $(CHARSET='UTF-8' idn -u $ALIASES);)
+		# Usage: v-add-domain USER DOMAIN [IP] [RESTART]
+		nice -19 $VESTA/bin/v-add-domain $USER $WEBDOMAIN $IP
+		# [[ -n "$ALIASES" ]] && (echo "	ALIASES:" $(CHARSET='UTF-8' idn -u $ALIASES);)
     	if [[ -n "$ALIASES" ]]; then
 			echo "ALIASES:" $(CHARSET='UTF-8' idn -u $ALIASES);
 			ALIASES=$(echo $(CHARSET='UTF-8' idn -u $ALIASES)|tr '\n' ' ')
@@ -390,6 +392,11 @@ for USER in $USERS; do
             echo -n "Copy files domain $WEBDOMAIN"; z_time
             # Usage: v-change-web-domain-tpl USER DOMAIN TEMPLATE [RESTART]
             nice -19 $VESTA/bin/v-change-web-domain-tpl $USER $WEBDOMAIN $PHP_VER
+            if [ -d "/home/$USER/web/$WEBDOMAIN/cgi-bin" ]; then
+            	$RSYNC -ratlz --rsh="$RSH_OPTIONS" "root@$IP_SOURCE:/var/www/$USER/data/php-bin/php.ini"  /home/$USER/web/$WEBDOMAIN/cgi-bin/ > /dev/null 2>&1
+            	$SED '/session.save_path/d'	/home/$USER/web/$WEBDOMAIN/cgi-bin/php.ini > /home/$USER/web/$WEBDOMAIN/cgi-bin/php5-cgi.ini
+            	rm -f /home/$USER/web/$WEBDOMAIN/cgi-bin/php.ini
+            fi
             if [[ -n "$SSL" ]] && [[ -n "$SSL_KEY" ]]; then
 				echo "From: $IP_SOURCE:/var/www/$USER/data/www/$DOMAIN/ ->"
 				z_wait "To: /home/$USER/web/$WEBDOMAIN/public_shtml"
