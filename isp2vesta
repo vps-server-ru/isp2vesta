@@ -1,4 +1,5 @@
 #!/bin/bash
+#
 v='isp2vesta 0.68 Beta VPS-server.ru edition :o)'
 
 DEFAULT_WEB_TEMPLATE='php54'
